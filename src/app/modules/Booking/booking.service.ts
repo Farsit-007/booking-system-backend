@@ -77,6 +77,7 @@ const createBooking = async (payload: TBooking) => {
       },
     },
   });
+
   const isExactMatch = existingBookings.some(
     (b) =>
       new Date(b.startTime).getTime() === start.getTime() &&
@@ -86,7 +87,7 @@ const createBooking = async (payload: TBooking) => {
   if (isExactMatch) {
     throw new AppError(
       httpStatus.CONFLICT,
-      "A booking already exists at this exact time range, regardless of resource."
+      "A booking already exists at this exact time range across all resources."
     );
   }
 
@@ -95,7 +96,6 @@ const createBooking = async (payload: TBooking) => {
     d.setSeconds(0, 0);
     return d;
   };
-
 
   const hasConflict = existingBookings.some((b) =>
     isOverlappingWithBuffer(
@@ -110,7 +110,7 @@ const createBooking = async (payload: TBooking) => {
   if (hasConflict) {
     throw new AppError(
       httpStatus.CONFLICT,
-      "The selected time conflicts with an existing booking or its buffer period."
+      "This time slot (including buffer period) is already booked across all resources."
     );
   }
 
