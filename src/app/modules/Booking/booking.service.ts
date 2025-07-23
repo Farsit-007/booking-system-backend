@@ -14,18 +14,25 @@ const isOverlappingWithBuffer = (
     existingStart.getTime() - bufferMinutes * 60 * 1000
   );
   const bufferEnd = new Date(existingEnd.getTime() + bufferMinutes * 60 * 1000);
-  return newStart < bufferEnd && newEnd > bufferStart;
+
+  return (
+    (newStart >= bufferStart && newStart <= bufferEnd) ||
+    (newEnd >= bufferStart && newEnd <= bufferEnd) ||
+    (newStart <= bufferStart && newEnd >= bufferEnd)
+  );
 };
 
 const createBooking = async (payload: TBooking) => {
   const { resource, startTime, endTime, requestedBy } = payload;
 
-   const start = new Date(startTime);
+  const start = new Date(startTime);
   const end = new Date(endTime);
-
   start.setSeconds(0, 0);
   end.setSeconds(0, 0);
+
   const now = new Date();
+  now.setSeconds(0, 0);
+
   if (start < now) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
@@ -34,12 +41,20 @@ const createBooking = async (payload: TBooking) => {
   }
 
   const durationMs = end.getTime() - start.getTime();
+  const minDurationMs = 15 * 60 * 1000;
   const maxDurationMs = 2 * 60 * 60 * 1000;
 
-  if (end <= start || durationMs < 15 * 60 * 1000) {
+  if (end <= start) {
     throw new AppError(
       httpStatus.BAD_REQUEST,
-      "Invalid booking time or duration too short."
+      "End time must be after start time."
+    );
+  }
+
+  if (durationMs < minDurationMs) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "Booking duration must be at least 15 minutes."
     );
   }
 
@@ -50,23 +65,53 @@ const createBooking = async (payload: TBooking) => {
     );
   }
 
-  // Get existing bookings for the same resource
-  const existingBookings = await prisma.booking.findMany({
-    where: { resource },
-  });
+  const bufferMs = 10 * 60 * 1000;
 
-  // Check conflicts with buffer
-  const hasConflict = existingBookings.some((booking) =>
+  const existingBookings = await prisma.booking.findMany({
+    where: {
+      startTime: {
+        lte: new Date(end.getTime() + bufferMs),
+      },
+      endTime: {
+        gte: new Date(start.getTime() - bufferMs),
+      },
+    },
+  });
+  const isExactMatch = existingBookings.some(
+    (b) =>
+      new Date(b.startTime).getTime() === start.getTime() &&
+      new Date(b.endTime).getTime() === end.getTime()
+  );
+
+  if (isExactMatch) {
+    throw new AppError(
+      httpStatus.CONFLICT,
+      "A booking already exists at this exact time range, regardless of resource."
+    );
+  }
+
+  const normalize = (date: Date) => {
+    const d = new Date(date);
+    d.setSeconds(0, 0);
+    return d;
+  };
+
+
+  const hasConflict = existingBookings.some((b) =>
     isOverlappingWithBuffer(
-      new Date(booking.startTime),
-      new Date(booking.endTime),
+      normalize(new Date(b.startTime)),
+      normalize(new Date(b.endTime)),
       start,
-      end
+      end,
+      10
     )
   );
 
   if (hasConflict) {
-    throw new AppError(httpStatus.BAD_REQUEST, "The slot is already booked");
+    throw new AppError(
+      httpStatus.CONFLICT,
+      "The selected time conflicts with an existing booking or its buffer period."
+    );
   }
 
   const newBooking = await prisma.booking.create({
@@ -144,7 +189,7 @@ const getAvailableSlots = async (params?: { date?: string }) => {
   const whereClause: any = {};
 
   if (params?.date) {
-   const selectedDate = new Date(params.date);
+    const selectedDate = new Date(params.date);
     const nextDate = new Date(selectedDate);
     nextDate.setDate(selectedDate.getDate() + 1);
 
